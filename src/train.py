@@ -6,7 +6,7 @@ from src.model import build_autoencoder
 
 DATA_PATH = "data/industrial_sensor_dataset2.xlsx"
 SCALER_PATH = "models/scaler.pkl"
-MODEL_PATH = "models/autoencoder.h5"
+MODEL_PATH = "models/autoencoder.keras"
 
 
 def train():
