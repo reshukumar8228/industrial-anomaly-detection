@@ -1,25 +1,21 @@
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.layers import Input, LSTM, Dense, RepeatVector, TimeDistributed
 
 
-def build_autoencoder(input_dim):
-    input_layer = Input(shape=(input_dim,))
+def build_lstm_autoencoder(timesteps, n_features):
+    inputs = Input(shape=(timesteps, n_features))
 
     # Encoder
-    x = Dense(16, activation='relu')(input_layer)
-    x = Dense(8, activation='relu')(x)
-    latent = Dense(4, activation='relu')(x)
+    x = LSTM(32, activation='relu', return_sequences=False)(inputs)
+    latent = Dense(16, activation='relu')(x)
 
     # Decoder
-    x = Dense(8, activation='relu')(latent)
-    x = Dense(16, activation='relu')(x)
-    output_layer = Dense(input_dim, activation='linear')(x)
+    x = RepeatVector(timesteps)(latent)
+    x = LSTM(32, activation='relu', return_sequences=True)(x)
+    outputs = TimeDistributed(Dense(n_features))(x)
 
-    autoencoder = Model(inputs=input_layer, outputs=output_layer)
+    model = Model(inputs, outputs)
 
-    autoencoder.compile(
-        optimizer='adam',
-        loss='mse'
-    )
+    model.compile(optimizer='adam', loss='mse')
 
-    return autoencoder
+    return model

@@ -1,61 +1,74 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 from sklearn.metrics import classification_report, roc_auc_score
 from tensorflow.keras.models import load_model
 
-from src.preprocessing import load_data, preprocess_data, scale_data
-
+from src.preprocessing import load_data, preprocess_data, scale_data, create_sequences
 
 # Paths
 DATA_PATH = "data/industrial_sensor_dataset2.xlsx"
 SCALER_PATH = "models/scaler.pkl"
-MODEL_PATH = "models/autoencoder.keras"   # or .h5 if you didn’t change
+MODEL_PATH = "models/lstm_autoencoder.keras"
+
+WINDOW_SIZE = 10
 
 
 def evaluate():
-    # 🔹 Load data
+    # Load data
     df = load_data(DATA_PATH)
 
-    # 🔹 Preprocess
+    # Preprocess
     X, y = preprocess_data(df)
 
-    # 🔹 Scale using saved scaler
+    # Scale
     X_scaled = scale_data(X, scaler_path=SCALER_PATH, fit=False)
 
-    # 🔹 Load trained model
+    # Create sequences
+    X_seq = create_sequences(X_scaled, WINDOW_SIZE)
+    y_seq = y[WINDOW_SIZE:].reset_index(drop=True)
+
+    # Load model
     model = load_model(MODEL_PATH, compile=False)
 
-    # 🔹 Reconstruction
-    recon = model.predict(X_scaled)
-    mse = np.mean(np.square(X_scaled - recon), axis=1)
+    # Reconstruction
+    recon = model.predict(X_seq)
+    mse = np.mean((X_seq - recon) ** 2, axis=(1, 2))
 
-    # 🔹 Threshold (tuned for better precision)
-    threshold = np.percentile(mse, 95)
+    # Threshold
+    threshold = np.percentile(mse, 97)
 
-    # 🔹 Predictions
+    # Predictions
     y_pred = (mse > threshold).astype(int)
 
-    # 🔹 Metrics
+    # Metrics
     print("\nThreshold:", threshold)
     print("\nClassification Report:\n")
-    print(classification_report(y, y_pred))
-    print("ROC-AUC:", roc_auc_score(y, mse))
+    print(classification_report(y_seq, y_pred))
+    print("ROC-AUC:", roc_auc_score(y_seq, mse))
 
-    # 🔹 Visualization (FIXED SCALE)
-    plt.figure(figsize=(8,5))
+    # Save results
+    os.makedirs("reports", exist_ok=True)
 
-    plt.hist(mse[y == 0], bins=50, alpha=0.6, label='Normal', density=True)
-    plt.hist(mse[y == 1], bins=50, alpha=0.6, label='Anomaly', density=True)
+    df_result = df.iloc[WINDOW_SIZE:].copy()
+    df_result["error"] = mse
+    df_result["prediction"] = y_pred
+
+    df_result.to_csv("reports/lstm_results.csv", index=False)
+
+    # Plot
+    plt.figure()
+
+    plt.hist(mse[y_seq == 0], bins=50, alpha=0.6, label='Normal')
+    plt.hist(mse[y_seq == 1], bins=50, alpha=0.6, label='Anomaly')
 
     plt.axvline(threshold, linestyle='--')
-
     plt.xlim(0, np.percentile(mse, 99))
-    plt.yscale('log')  # ✅ makes anomalies visible
 
     plt.legend()
-    plt.title("Reconstruction Error Distribution")
+    plt.title("LSTM Reconstruction Error")
 
-    plt.savefig("reports/error_distribution.png")
+    plt.savefig("reports/lstm_error_plot.png")
     plt.show()
 
 

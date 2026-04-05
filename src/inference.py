@@ -1,75 +1,58 @@
 import numpy as np
 import joblib
-import pandas as pd
 from tensorflow.keras.models import load_model
 
-# Paths
 SCALER_PATH = "models/scaler.pkl"
-MODEL_PATH = "models/autoencoder.keras"   # ✅ updated format
+MODEL_PATH = "models/lstm_autoencoder.keras"
 
 
-class AnomalyDetector:
-    def __init__(self, threshold):
-        # Load scaler
+class LSTMAnomalyDetector:
+    def __init__(self, threshold, window_size=10):
         self.scaler = joblib.load(SCALER_PATH)
-
-        # Load model (no compile needed for inference)
         self.model = load_model(MODEL_PATH, compile=False)
-
         self.threshold = threshold
+        self.window_size = window_size
+        self.buffer = []
 
     def predict(self, sample):
-        try:
-            # Convert to numpy array
-            sample = np.array(sample).reshape(1, -1)
+        self.buffer.append(sample)
 
-            # Scale
-            sample_scaled = self.scaler.transform(sample)
+        if len(self.buffer) < self.window_size:
+            return {"status": "waiting_for_sequence"}
 
-            # Reconstruction
-            recon = self.model.predict(sample_scaled, verbose=0)
+        if len(self.buffer) > self.window_size:
+            self.buffer.pop(0)
 
-            # Error
-            error = np.mean((sample_scaled - recon) ** 2)
+        sequence = np.array(self.buffer)
+        sequence_scaled = self.scaler.transform(sequence)
+        sequence_scaled = sequence_scaled.reshape(1, self.window_size, -1)
 
-            # Decision
-            is_anomaly = error > self.threshold
+        recon = self.model.predict(sequence_scaled, verbose=0)
+        error = np.mean((sequence_scaled - recon) ** 2)
 
-            return {
-                "error": float(error),
-                "anomaly": bool(is_anomaly)
-            }
-
-        except Exception as e:
-            return {"error": str(e), "anomaly": None}
+        return {
+            "error": float(error),
+            "anomaly": error > self.threshold
+        }
 
 
-# ✅ Run test when file is executed
 if __name__ == "__main__":
-    # Use your evaluated threshold
-    threshold = 0.08   # adjust based on your evaluation output
+    detector = LSTMAnomalyDetector(threshold=0.1)
 
-    detector = AnomalyDetector(threshold=threshold)
+    # Simulate streaming
+    samples = [
+        [20.5, 35.0, 100.0, 70.0, 0.02],
+        [20.6, 35.1, 100.5, 70.2, 0.02],
+        [20.7, 35.2, 101.0, 70.1, 0.02],
+        [20.8, 35.3, 101.2, 70.3, 0.02],
+        [20.9, 35.4, 101.5, 70.4, 0.02],
+        [21.0, 35.5, 101.8, 70.5, 0.02],
+        [21.2, 35.6, 102.0, 70.6, 0.02],
+        [21.3, 35.7, 102.2, 70.7, 0.02],
+        [21.5, 35.8, 102.5, 70.8, 0.02],
+        [21.6, 35.9, 102.7, 70.9, 0.02],
+    ]
 
-    print("\n🔍 Testing Inference...\n")
-
-    # Option 1: Manual sample
-    sample = [20.5, 35.0, 100.0, 70.0, 0.02]
-
-    result = detector.predict(sample)
-
-    print("Input Sample:", sample)
-    print("Prediction:", result)
-
-    # Option 2: Test with real dataset row
-    try:
-        df = pd.read_excel("data/industrial_sensor_dataset2.xlsx")
-        real_sample = df.iloc[0].drop("label").values.tolist()
-
-        result_real = detector.predict(real_sample)
-
-        print("\nReal Data Sample:", real_sample)
-        print("Prediction:", result_real)
-
-    except Exception as e:
-        print("\nCould not load dataset sample:", e)
+    for s in samples:
+        result = detector.predict(s)
+        print(result)
