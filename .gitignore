@@ -1,0 +1,24 @@
+Environments
+
+venv/
+env/
+.env
+
+Python specific
+
+pycache/
+*.pyc
+*.pyo
+
+Data and Outputs (Keep these local to prevent blowing up repo size)
+
+data/.csv
+outputs/.png
+outputs/.pth
+outputs/.json
+
+IDEs
+
+.vscode/
+.idea/
+.ipynb_checkpoints/
