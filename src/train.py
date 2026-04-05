@@ -5,7 +5,7 @@ from src.preprocessing import load_data, preprocess_data, scale_data, create_seq
 from src.model import build_lstm_autoencoder
 
 # Paths
-DATA_PATH = "data/industrial_sensor_dataset2.xlsx"
+DATA_PATH = "data/high_anomaly_dataset.csv"
 SCALER_PATH = "models/scaler.pkl"
 MODEL_PATH = "models/lstm_autoencoder.keras"
 

@@ -7,7 +7,7 @@ from tensorflow.keras.models import load_model
 from src.preprocessing import load_data, preprocess_data, scale_data, create_sequences
 
 # Paths
-DATA_PATH = "data/industrial_sensor_dataset2.xlsx"
+DATA_PATH = "data/high_anomaly_dataset.csv"
 SCALER_PATH = "models/scaler.pkl"
 MODEL_PATH = "models/lstm_autoencoder.keras"
 
