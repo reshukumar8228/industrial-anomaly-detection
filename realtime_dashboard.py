@@ -5,6 +5,7 @@ import time
 import plotly.graph_objects as go
 from tensorflow.keras.models import load_model
 import joblib
+import json
 
 # ================= CONFIG =================
 st.set_page_config(layout="wide")
@@ -26,15 +27,22 @@ df['timestamp'] = pd.to_datetime(df['timestamp'])
 scaler = joblib.load(SCALER_PATH)
 model = load_model(MODEL_PATH, compile=False)
 
+# ================= LOAD KPI METRICS =================
+metrics = {}
+try:
+    with open("reports/metrics.json") as f:
+        metrics = json.load(f)
+except:
+    metrics = {}
+
 # ================= UI =================
 st.title("🚀 Industrial Real-Time Anomaly Detection Dashboard")
-st.caption("Real-time LSTM-based anomaly detection using reconstruction loss")
 
 with st.sidebar:
     threshold_percentile = st.slider("Threshold Percentile", 90, 99, 97)
     run = st.button("Run Analysis")
 
-# ================= SOUND FIX =================
+# ================= SOUND =================
 def play_sound():
     st.markdown("""
         <audio autoplay>
@@ -55,7 +63,8 @@ if run:
     threshold = 0
 
     placeholder = st.empty()
-    alert_placeholder = st.empty()  # ✅ FIX notification spam
+    alert_placeholder = st.empty()
+    kpi_placeholder = st.empty()
 
     for i in range(min(len(df), MAX_POINTS)):
 
@@ -84,16 +93,33 @@ if run:
 
             errors.append(error)
 
-            if len(errors) > 10:
+            # Threshold calculation
+            if len(errors) > 20:
                 threshold = np.percentile(errors, threshold_percentile)
 
+            # ================= KPI (SHOW ONLY AFTER THRESHOLD) =================
+            if threshold > 0:
+                with kpi_placeholder.container():
+
+                    st.subheader("📊 KPI Summary")
+
+                    k1, k2, k3, k4, k5, k6 = st.columns(6)
+
+                    k1.metric("Total Data Points", len(timestamps))
+                    k2.metric("Anomalies Detected", len(anomaly_idx))
+                    k3.metric("Accuracy", f"{metrics.get('accuracy', 0)*100:.2f}%")
+                    k4.metric("Recall", f"{metrics.get('recall', 0)*100:.2f}%")
+                    k5.metric("F1 Score", f"{metrics.get('f1_score', 0):.2f}")
+                    k6.metric("Threshold", f"{threshold:.4f}")
+
+            else:
+                kpi_placeholder.info("⏳ Calculating threshold...")
+
+            # ================= ANOMALY =================
             if threshold > 0 and error > threshold:
                 anomaly_idx.append(i)
 
-                # 🔊 SOUND
                 play_sound()
-
-                # 🚨 SINGLE ALERT
                 alert_placeholder.error(f"⚠️ Anomaly detected at {t}")
 
         else:
@@ -110,7 +136,6 @@ if run:
 
                 fig = go.Figure()
 
-                # ✅ MOVING WINDOW
                 x_window = timestamps[-DISPLAY_WINDOW:]
                 y_window = sensor_data[f][-DISPLAY_WINDOW:]
 
@@ -121,7 +146,6 @@ if run:
                     name='Normal'
                 ))
 
-                # anomalies in window
                 anomaly_x = [timestamps[j] for j in anomaly_idx if j >= len(timestamps)-DISPLAY_WINDOW]
                 anomaly_y = [sensor_data[f][j] for j in anomaly_idx if j >= len(timestamps)-DISPLAY_WINDOW]
 
@@ -145,28 +169,25 @@ if run:
             fig_err.add_trace(go.Scatter(
                 x=timestamps[-DISPLAY_WINDOW:],
                 y=errors[-DISPLAY_WINDOW:],
-                mode='lines',
-                name='Error'
+                mode='lines'
             ))
 
             if threshold > 0:
                 fig_err.add_hline(y=threshold, line_dash="dash", line_color="red")
 
-            fig_err.update_layout(title="Reconstruction Error")
-
             st.plotly_chart(fig_err, width="stretch")
 
-            # ================= METRICS =================
-            col1, col2 = st.columns(2)
-            col1.metric("Total Points", len(timestamps))
-            col2.metric("Anomalies Detected", len(anomaly_idx))
+            # ================= BASIC METRICS =================
+            m1, m2 = st.columns(2)
+            m1.metric("Total Points", len(timestamps))
+            m2.metric("Anomalies", len(anomaly_idx))
 
         time.sleep(0.05)
 
     # ================= FINAL =================
     st.success("✅ Streaming Completed (150 points)")
 
-    st.header("📊 Final Summary (Full Data)")
+    st.header("📊 Final Summary")
 
     cols = st.columns(2)
 
