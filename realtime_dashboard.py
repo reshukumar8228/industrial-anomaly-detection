@@ -20,6 +20,14 @@ DISPLAY_WINDOW = 100
 
 features = ["pressure", "temperature", "flow", "level", "vibration"]
 
+units = {
+    "pressure": "bar",
+    "temperature": "°C",
+    "flow": "L/min",
+    "level": "cm",
+    "vibration": "mm/s"
+}
+
 # ================= LOAD =================
 df = pd.read_csv(DATA_PATH)
 df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -27,44 +35,66 @@ df['timestamp'] = pd.to_datetime(df['timestamp'])
 scaler = joblib.load(SCALER_PATH)
 model = load_model(MODEL_PATH, compile=False)
 
-# ================= LOAD KPI METRICS =================
+# ================= METRICS =================
 metrics = {}
 try:
     with open("reports/metrics.json") as f:
         metrics = json.load(f)
 except:
-    metrics = {}
+    pass
+
+accuracy = metrics.get("accuracy", 0)
+precision = metrics.get("precision", metrics.get("f1_score", 0))
+recall = metrics.get("recall", 0)
+f1 = metrics.get("f1_score", 0)
 
 # ================= UI =================
-st.title("🚀 Industrial Real-Time Anomaly Detection Dashboard")
+st.title("🚀 Industrial Anomaly Detection Dashboard")
 
 with st.sidebar:
-    threshold_percentile = st.slider("Threshold Percentile", 90, 99, 97)
+    threshold_percentile = st.slider("Threshold Percentile", 80, 99, 85)
     run = st.button("Run Analysis")
 
 # ================= SOUND =================
 def play_sound():
     st.markdown("""
-        <audio autoplay>
-        <source src="https://www.soundjay.com/buttons/sounds/beep-01a.mp3" type="audio/mp3">
-        </audio>
+    <audio autoplay>
+    <source src="https://www.soundjay.com/buttons/sounds/beep-01a.mp3" type="audio/mp3">
+    </audio>
     """, unsafe_allow_html=True)
 
-# ================= MAIN =================
+# ================= HELPERS =================
+def anomaly_context(rate):
+    if rate < 5:
+        return "Low"
+    elif rate < 15:
+        return "Moderate"
+    else:
+        return "High"
+
+def severity_color(sev):
+    return {
+        "Normal": "🟢",
+        "Medium": "🟠",
+        "High": "🔴"
+    }[sev]
+
+# ================= RUN =================
 if run:
 
-    buffer = []
-    errors = []
-    anomaly_idx = []
+    st.info("🟢 Live Streaming Started...")
 
+    buffer, errors, anomaly_idx, severity_list = [], [], [], []
     sensor_data = {f: [] for f in features}
     timestamps = []
 
     threshold = 0
 
-    placeholder = st.empty()
-    alert_placeholder = st.empty()
-    kpi_placeholder = st.empty()
+    # placeholders
+    kpi = st.empty()
+    status = st.empty()
+    charts = st.empty()
+    alert_box = st.empty()
 
     for i in range(min(len(df), MAX_POINTS)):
 
@@ -72,16 +102,13 @@ if run:
         t = row["timestamp"]
 
         timestamps.append(t)
-
         for f in features:
             sensor_data[f].append(row[f])
 
         buffer.append(row[features])
-
         if len(buffer) > WINDOW_SIZE:
             buffer.pop(0)
 
-        # ================= MODEL =================
         if len(buffer) == WINDOW_SIZE:
 
             seq_df = pd.DataFrame(buffer, columns=features)
@@ -93,42 +120,80 @@ if run:
 
             errors.append(error)
 
-            # Threshold calculation
             if len(errors) > 20:
                 threshold = np.percentile(errors, threshold_percentile)
 
-            # ================= KPI (SHOW ONLY AFTER THRESHOLD) =================
+            # ===== SEVERITY =====
             if threshold > 0:
-                with kpi_placeholder.container():
+                if error > 2 * threshold:
+                    severity = "High"
+                elif error > threshold:
+                    severity = "Medium"
+                else:
+                    severity = "Normal"
+            else:
+                severity = "Normal"
 
+            severity_list.append(severity)
+
+            # ===== SENSOR CONTRIBUTION =====
+            sensor_error = np.mean((seq_scaled - recon) ** 2, axis=(1, 2))
+            dominant_sensor = features[np.argmax(np.var(seq_scaled[0], axis=0))]
+
+            # ===== KPI (CARD STYLE) =====
+            if threshold > 0:
+
+                confidence = max(0, min(100, (1 - error / (2 * threshold)) * 100))
+
+                with kpi.container():
                     st.subheader("📊 KPI Summary")
 
-                    k1, k2, k3, k4, k5, k6 = st.columns(6)
+                    c1, c2, c3, c4 = st.columns(4)
+                    c5, c6, c7, c8 = st.columns(4)
 
-                    k1.metric("Total Data Points", len(timestamps))
-                    k2.metric("Anomalies Detected", len(anomaly_idx))
-                    k3.metric("Accuracy", f"{metrics.get('accuracy', 0)*100:.2f}%")
-                    k4.metric("Recall", f"{metrics.get('recall', 0)*100:.2f}%")
-                    k5.metric("F1 Score", f"{metrics.get('f1_score', 0):.2f}")
-                    k6.metric("Threshold", f"{threshold:.4f}")
+                    c1.metric("Accuracy", f"{accuracy*100:.2f}%")
+                    c2.metric("Precision", f"{precision:.2f}")
+                    c3.metric("Recall", f"{recall:.2f}")
+                    c4.metric("F1 Score", f"{f1:.2f}")
 
-            else:
-                kpi_placeholder.info("⏳ Calculating threshold...")
+                    c5.metric("Total Points", len(timestamps))
+                    c6.metric("Anomalies", len(anomaly_idx))
+                    c7.metric("Threshold", f"{threshold:.4f}")
+                    c8.metric("Confidence", f"{confidence:.2f}%")
 
-            # ================= ANOMALY =================
-            if threshold > 0 and error > threshold:
+                    st.caption(f"Confidence based on distance from threshold")
+
+                    st.write(f"Threshold Percentile: {threshold_percentile}%")
+
+            # ===== STATUS =====
+            sys_state = "🟢 Live" if severity == "Normal" else "🔴 Fault Detected"
+
+            with status.container():
+                st.subheader("📡 System Status")
+                st.write(f"Status: {sys_state}")
+                st.write(f"Active Sensors: {len(features)}")
+                st.write(f"Last Update: {t}")
+
+            # ===== ALERT =====
+            if severity != "Normal":
                 anomaly_idx.append(i)
-
                 play_sound()
-                alert_placeholder.error(f"⚠️ Anomaly detected at {t}")
+
+                alert_box.warning(
+                    f"""
+⚠ {severity} Anomaly  
+Sensor: {dominant_sensor.capitalize()}  
+Error: {error:.4f}  
+Time: {t}
+                    """
+                )
 
         else:
             errors.append(0)
+            severity_list.append("Normal")
 
-        # ================= LIVE DISPLAY =================
-        with placeholder.container():
-
-            st.subheader("📡 Sensor Signals (Live)")
+        # ================= CHARTS =================
+        with charts.container():
 
             cols = st.columns(2)
 
@@ -136,58 +201,82 @@ if run:
 
                 fig = go.Figure()
 
-                x_window = timestamps[-DISPLAY_WINDOW:]
-                y_window = sensor_data[f][-DISPLAY_WINDOW:]
+                x = timestamps[-DISPLAY_WINDOW:]
+                y = sensor_data[f][-DISPLAY_WINDOW:]
+
+                fig.add_trace(go.Scatter(x=x, y=y, mode='lines'))
+
+                mean = np.mean(y)
+                std = np.std(y)
+
+                fig.add_hrect(
+                    y0=mean - std,
+                    y1=mean + std,
+                    fillcolor="cyan",
+                    opacity=0.25
+                )
+
+                # anomalies
+                ax, ay = [], []
+                for j in range(len(x)):
+                    gi = len(timestamps) - len(x) + j
+                    if gi in anomaly_idx:
+                        ax.append(x[j])
+                        ay.append(y[j])
 
                 fig.add_trace(go.Scatter(
-                    x=x_window,
-                    y=y_window,
-                    mode='lines',
-                    name='Normal'
-                ))
-
-                anomaly_x = [timestamps[j] for j in anomaly_idx if j >= len(timestamps)-DISPLAY_WINDOW]
-                anomaly_y = [sensor_data[f][j] for j in anomaly_idx if j >= len(timestamps)-DISPLAY_WINDOW]
-
-                fig.add_trace(go.Scatter(
-                    x=anomaly_x,
-                    y=anomaly_y,
+                    x=ax,
+                    y=ay,
                     mode='markers',
-                    marker=dict(color='red', size=6),
-                    name='Anomaly'
+                    marker=dict(color="red", size=7)
                 ))
 
-                fig.update_layout(title=f"{f.capitalize()} Sensor")
+                fig.update_layout(title=f"{f} ({units[f]})")
 
                 cols[idx % 2].plotly_chart(fig, width="stretch")
 
-            # ================= ERROR GRAPH =================
-            st.subheader("⚠️ Reconstruction Error")
-
+            # ===== ERROR GRAPH (IMPROVED) =====
             fig_err = go.Figure()
 
             fig_err.add_trace(go.Scatter(
                 x=timestamps[-DISPLAY_WINDOW:],
-                y=errors[-DISPLAY_WINDOW:],
-                mode='lines'
+                y=errors[-DISPLAY_WINDOW:]
             ))
 
             if threshold > 0:
-                fig_err.add_hline(y=threshold, line_dash="dash", line_color="red")
+                fig_err.add_hline(
+                    y=threshold,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text=f"Threshold ({threshold:.4f})"
+                )
+
+            fig_err.update_layout(
+                title="Reconstruction Error",
+                yaxis_title="Reconstruction Error"
+            )
 
             st.plotly_chart(fig_err, width="stretch")
 
-            # ================= BASIC METRICS =================
-            m1, m2 = st.columns(2)
-            m1.metric("Total Points", len(timestamps))
-            m2.metric("Anomalies", len(anomaly_idx))
-
         time.sleep(0.05)
 
-    # ================= FINAL =================
-    st.success("✅ Streaming Completed (150 points)")
+    # ================= FINAL SUMMARY =================
+    st.markdown("---")
+    st.success("✅ Streaming Completed")
 
     st.header("📊 Final Summary")
+
+    total = len(timestamps)
+    anomalies = len(anomaly_idx)
+    rate = (anomalies / total) * 100 if total > 0 else 0
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Points", total)
+    c2.metric("Anomalies", anomalies)
+    c3.metric("Anomaly Rate", f"{rate:.2f}%")
+
+    # ===== FULL GRAPHS =====
+    st.subheader("📈 Full Sensor Analysis")
 
     cols = st.columns(2)
 
@@ -201,32 +290,62 @@ if run:
             mode='lines'
         ))
 
-        anomaly_x = [timestamps[j] for j in anomaly_idx]
-        anomaly_y = [sensor_data[f][j] for j in anomaly_idx]
+        ax = [timestamps[i] for i in anomaly_idx]
+        ay = [sensor_data[f][i] for i in anomaly_idx]
 
         fig.add_trace(go.Scatter(
-            x=anomaly_x,
-            y=anomaly_y,
+            x=ax,
+            y=ay,
             mode='markers',
-            marker=dict(color='red', size=6)
+            marker=dict(color="red", size=7)
         ))
 
-        fig.update_layout(title=f"{f.capitalize()} Sensor (Final)")
+        fig.update_layout(title=f"{f} ({units[f]})")
 
         cols[idx % 2].plotly_chart(fig, width="stretch")
 
-    # FINAL ERROR GRAPH
+    # ===== FULL ERROR =====
+    st.subheader("⚠️ Reconstruction Error (Full)")
+
     fig_err = go.Figure()
 
     fig_err.add_trace(go.Scatter(
         x=timestamps,
-        y=errors,
-        mode='lines'
+        y=errors
     ))
 
     if threshold > 0:
-        fig_err.add_hline(y=threshold, line_dash="dash", line_color="red")
-
-    fig_err.update_layout(title="Final Reconstruction Error")
+        fig_err.add_hline(
+            y=threshold,
+            line_dash="dash",
+            line_color="red"
+        )
 
     st.plotly_chart(fig_err, width="stretch")
+
+    # ===== EXPORT =====
+    df_export = pd.DataFrame({
+        "timestamp": timestamps,
+        "error": errors,
+        "severity": severity_list
+    })
+
+    st.download_button(
+        "⬇ Download Full Results",
+        df_export.to_csv(index=False),
+        "final_results.csv"
+    )
+
+    # ===== MODEL INFO =====
+    st.markdown("---")
+    st.subheader("🧪 Model Info")
+    st.write("Model: LSTM Autoencoder")
+    st.write(f"Window Size: {WINDOW_SIZE}")
+    st.write(f"Threshold Percentile: {threshold_percentile}%")
+
+    # ===== EXPLANATION =====
+    st.markdown("---")
+    st.subheader("🔍 Explanation")
+    st.write("Low error → Normal")
+    st.write("Medium error → Warning")
+    st.write("High error → Critical anomaly")
