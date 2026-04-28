@@ -2,10 +2,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
-from src.preprocessing import load_data, preprocess_data, scale_data, create_sequences
+from preprocessing import load_data, preprocess_data, scale_data, create_sequences
 from tensorflow.keras.models import load_model
 
-DATA_PATH = "data/high_anomaly_dataset.csv"
+DATA_PATH = "data/boiler_dataset.csv"
 MODEL_PATH = "models/lstm_autoencoder.keras"
 SCALER_PATH = "models/scaler.pkl"
 
@@ -18,12 +18,11 @@ def visualize():
     df['timestamp'] = pd.to_datetime(df['timestamp'])
 
     # Preprocess
-    X, y = preprocess_data(df)
+    X = preprocess_data(df)
     X_scaled = scale_data(X, scaler_path=SCALER_PATH, fit=False)
 
     # Create sequences
     X_seq = create_sequences(X_scaled, WINDOW_SIZE)
-    y_seq = y[WINDOW_SIZE:].reset_index(drop=True)
 
     # Load model
     model = load_model(MODEL_PATH, compile=False)
@@ -35,12 +34,12 @@ def visualize():
     threshold = np.percentile(mse, 97)
     y_pred = (mse > threshold).astype(int)
 
-    time = df['timestamp'][WINDOW_SIZE:]
+    time = X.index[WINDOW_SIZE:]
 
     # 🔵 GRAPH 1: Sensor with anomalies
     plt.figure(figsize=(12, 4))
 
-    sensor = df['pressure'][WINDOW_SIZE:]
+    sensor = X['pressure'].iloc[WINDOW_SIZE:]
 
     plt.plot(time, sensor, label='Normal')
 

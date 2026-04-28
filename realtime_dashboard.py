@@ -6,31 +6,36 @@ import plotly.graph_objects as go
 from tensorflow.keras.models import load_model
 import joblib
 import json
+import os
 
 # ================= CONFIG =================
 st.set_page_config(layout="wide")
 
-DATA_PATH = "data/high_anomaly_dataset.csv"
+DATA_PATH = "data/boiler_dataset.csv"
 MODEL_PATH = "models/lstm_autoencoder.keras"
 SCALER_PATH = "models/scaler.pkl"
 
 WINDOW_SIZE = 10
-MAX_POINTS = 150
-DISPLAY_WINDOW = 100
-
-features = ["pressure", "temperature", "flow", "level", "vibration"]
-
-units = {
-    "pressure": "bar",
-    "temperature": "°C",
-    "flow": "L/min",
-    "level": "cm",
-    "vibration": "mm/s"
-}
+MAX_POINTS = 200
+DISPLAY_WINDOW = 200
 
 # ================= LOAD =================
 df = pd.read_csv(DATA_PATH)
-df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+if 'timestamp' in df.columns:
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+elif 'date' in df.columns:
+    df['timestamp'] = pd.to_datetime(df['date'])
+else:
+    raise ValueError("No timestamp/date column found")
+df = df.sort_values('timestamp')
+
+features = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+if 'timestamp' in features:
+    features.remove('timestamp')
+
+# For UI clarity, only show first 5 sensors
+display_features = features[:5]
 
 scaler = joblib.load(SCALER_PATH)
 model = load_model(MODEL_PATH, compile=False)
@@ -43,17 +48,21 @@ try:
 except:
     pass
 
-accuracy = metrics.get("accuracy", 0)
-precision = metrics.get("precision", metrics.get("f1_score", 0))
-recall = metrics.get("recall", 0)
-f1 = metrics.get("f1_score", 0)
-
 # ================= UI =================
 st.title("🚀 Industrial Anomaly Detection Dashboard")
 
 with st.sidebar:
     threshold_percentile = st.slider("Threshold Percentile", 80, 99, 85)
+    selected_sensor = st.selectbox("Select Sensor", features)
     run = st.button("Run Analysis")
+
+    st.markdown("---")
+    st.subheader("📉 Training Loss")
+    if os.path.exists("reports/training_loss.png"):
+        st.image("reports/training_loss.png", use_container_width=True)
+    else:
+        st.info("Run train.py to generate training loss graph.")
+
 
 # ================= SOUND =================
 def play_sound():
@@ -72,13 +81,6 @@ def anomaly_context(rate):
     else:
         return "High"
 
-def severity_color(sev):
-    return {
-        "Normal": "🟢",
-        "Medium": "🟠",
-        "High": "🔴"
-    }[sev]
-
 # ================= RUN =================
 if run:
 
@@ -88,20 +90,22 @@ if run:
     sensor_data = {f: [] for f in features}
     timestamps = []
 
-    threshold = 0
-
     # placeholders
+    st.markdown("### 📊 KPI Summary")
     kpi = st.empty()
     status = st.empty()
     charts = st.empty()
     alert_box = st.empty()
 
-    for i in range(min(len(df), MAX_POINTS)):
+    start_idx = np.random.randint(0, len(df) - MAX_POINTS)
+
+    for i in range(start_idx, start_idx + MAX_POINTS):
 
         row = df.iloc[i]
         t = row["timestamp"]
 
         timestamps.append(t)
+
         for f in features:
             sensor_data[f].append(row[f])
 
@@ -115,58 +119,54 @@ if run:
             seq_scaled = scaler.transform(seq_df)
             seq_scaled = seq_scaled.reshape(1, WINDOW_SIZE, -1)
 
-            recon = model.predict(seq_scaled, verbose=0)
-            error = np.mean((seq_scaled - recon) ** 2)
+            recon = model(seq_scaled, training=False).numpy()
 
+            # 🔥 FIXED ERROR FORMULA (balanced)
+            error = np.mean((seq_scaled - recon) ** 2)
             errors.append(error)
 
-            if len(errors) > 20:
-                threshold = np.percentile(errors, threshold_percentile)
+            if len(errors) == 0:
+                st.warning("No data available to compute threshold")
+                st.stop()
+
+            threshold = np.percentile(errors, threshold_percentile)
 
             # ===== SEVERITY =====
-            if threshold > 0:
-                if error > 2 * threshold:
-                    severity = "High"
-                elif error > threshold:
-                    severity = "Medium"
-                else:
-                    severity = "Normal"
+            if error > 2 * threshold:
+                severity = "High"
+            elif error > threshold:
+                severity = "Medium"
             else:
                 severity = "Normal"
 
             severity_list.append(severity)
 
             # ===== SENSOR CONTRIBUTION =====
-            sensor_error = np.mean((seq_scaled - recon) ** 2, axis=(1, 2))
-            dominant_sensor = features[np.argmax(np.var(seq_scaled[0], axis=0))]
+            feature_errors = np.mean((seq_scaled[0] - recon[0]) ** 2, axis=0)
+            dominant_sensor = features[np.argmax(feature_errors)]
 
-            # ===== KPI (CARD STYLE) =====
-            if threshold > 0:
+            # ===== KPI =====
+            confidence = min(100, (error / threshold) * 100) if threshold > 1e-9 else 0
 
-                confidence = max(0, min(100, (1 - error / (2 * threshold)) * 100))
+            with kpi.container():
+                c1, c2, c3 = st.columns(3)
+                c4, c5 = st.columns(2)
 
-                with kpi.container():
-                    st.subheader("📊 KPI Summary")
+                c1.metric("Total Data Points", len(timestamps))
+                c2.metric("Anomalies Detected", len(anomaly_idx))
+                
+                anomaly_rate = (len(anomaly_idx) / len(timestamps)) * 100 if len(timestamps) > 0 else 0
+                c3.metric("Anomaly Rate", f"{anomaly_rate:.2f}%")
 
-                    c1, c2, c3, c4 = st.columns(4)
-                    c5, c6, c7, c8 = st.columns(4)
-
-                    c1.metric("Accuracy", f"{accuracy*100:.2f}%")
-                    c2.metric("Precision", f"{precision:.2f}")
-                    c3.metric("Recall", f"{recall:.2f}")
-                    c4.metric("F1 Score", f"{f1:.2f}")
-
-                    c5.metric("Total Points", len(timestamps))
-                    c6.metric("Anomalies", len(anomaly_idx))
-                    c7.metric("Threshold", f"{threshold:.4f}")
-                    c8.metric("Confidence", f"{confidence:.2f}%")
-
-                    st.caption(f"Confidence based on distance from threshold")
-
-                    st.write(f"Threshold Percentile: {threshold_percentile}%")
+                c4.metric("Threshold Value", f"{threshold:.6f}")
+                c5.metric("Threshold Percentile", f"{threshold_percentile}%")
 
             # ===== STATUS =====
-            sys_state = "🟢 Live" if severity == "Normal" else "🔴 Fault Detected"
+            anomalies_detected = len(anomaly_idx)
+            if anomalies_detected > 0:
+                sys_state = "🔴 Fault Detected"
+            else:
+                sys_state = "🟢 Normal"
 
             with status.container():
                 st.subheader("📡 System Status")
@@ -176,7 +176,7 @@ if run:
 
             # ===== ALERT =====
             if severity != "Normal":
-                anomaly_idx.append(i)
+                anomaly_idx.append(len(timestamps) - 1)
                 play_sound()
 
                 alert_box.warning(
@@ -184,20 +184,46 @@ if run:
 ⚠ {severity} Anomaly  
 Sensor: {dominant_sensor.capitalize()}  
 Error: {error:.4f}  
+Threshold: {threshold:.4f}  
+Confidence: {confidence:.2f}%  
 Time: {t}
                     """
                 )
 
         else:
-            errors.append(0)
-            severity_list.append("Normal")
+            continue
 
         # ================= CHARTS =================
         with charts.container():
 
+            st.subheader(f"🔍 Detailed View: {selected_sensor}")
+            fig_sel = go.Figure()
+
+            x_sel = timestamps[-DISPLAY_WINDOW:]
+            y_sel = sensor_data[selected_sensor][-DISPLAY_WINDOW:]
+
+            fig_sel.add_trace(go.Scatter(x=x_sel, y=y_sel, mode='lines'))
+
+            mean_sel = np.mean(y_sel)
+            std_sel = np.std(y_sel)
+            fig_sel.add_hrect(y0=mean_sel - std_sel, y1=mean_sel + std_sel, fillcolor="cyan", opacity=0.25)
+
+            ax_sel, ay_sel = [], []
+            for j in range(len(x_sel)):
+                gi = len(timestamps) - len(x_sel) + j
+                if gi in anomaly_idx:
+                    ax_sel.append(x_sel[j])
+                    ay_sel.append(y_sel[j])
+
+            fig_sel.add_trace(go.Scatter(x=ax_sel, y=ay_sel, mode='markers', marker=dict(color="red", size=7)))
+            fig_sel.update_layout(title=f"{selected_sensor}")
+            st.plotly_chart(fig_sel, width="stretch", key=f"plot_sel_{i}")
+
+            st.subheader("📊 Overview (First 5 Sensors)")
+
             cols = st.columns(2)
 
-            for idx, f in enumerate(features):
+            for idx, f in enumerate(display_features):
 
                 fig = go.Figure()
 
@@ -216,7 +242,6 @@ Time: {t}
                     opacity=0.25
                 )
 
-                # anomalies
                 ax, ay = [], []
                 for j in range(len(x)):
                     gi = len(timestamps) - len(x) + j
@@ -231,56 +256,78 @@ Time: {t}
                     marker=dict(color="red", size=7)
                 ))
 
-                fig.update_layout(title=f"{f} ({units[f]})")
+                fig.update_layout(title=f"{f}")
 
-                cols[idx % 2].plotly_chart(fig, width="stretch")
+                cols[idx % 2].plotly_chart(fig, width="stretch", key=f"plot_{f}_{i}")
 
-            # ===== ERROR GRAPH (IMPROVED) =====
+            # ===== ERROR GRAPH =====
             fig_err = go.Figure()
 
+            min_len = min(len(timestamps), len(errors))
+            x_vals = timestamps[-min_len:]
+            y_vals = errors[-min_len:]
+
             fig_err.add_trace(go.Scatter(
-                x=timestamps[-DISPLAY_WINDOW:],
-                y=errors[-DISPLAY_WINDOW:]
+                x=x_vals[-DISPLAY_WINDOW:],
+                y=y_vals[-DISPLAY_WINDOW:]
             ))
 
-            if threshold > 0:
-                fig_err.add_hline(
-                    y=threshold,
-                    line_dash="dash",
-                    line_color="red",
-                    annotation_text=f"Threshold ({threshold:.4f})"
-                )
+            fig_err.add_hline(
+                y=threshold,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=f"Threshold ({threshold:.4f})"
+            )
 
             fig_err.update_layout(
                 title="Reconstruction Error",
+                xaxis_title="Time",
                 yaxis_title="Reconstruction Error"
             )
 
-            st.plotly_chart(fig_err, width="stretch")
+            st.plotly_chart(fig_err, width="stretch", key=f"plot_err_{i}")
 
         time.sleep(0.05)
 
     # ================= FINAL SUMMARY =================
-    st.markdown("---")
     st.success("✅ Streaming Completed")
 
-    st.header("📊 Final Summary")
+    st.markdown("## 📊 Final Summary")
 
     total = len(timestamps)
     anomalies = len(anomaly_idx)
     rate = (anomalies / total) * 100 if total > 0 else 0
 
+    context = anomaly_context(rate)
+
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Points", total)
     c2.metric("Anomalies", anomalies)
-    c3.metric("Anomaly Rate", f"{rate:.2f}%")
+    c3.metric("Anomaly Rate", f"{rate:.2f}% ({context})")
 
     # ===== FULL GRAPHS =====
-    st.subheader("📈 Full Sensor Analysis")
+    st.subheader(f"🔍 Detailed View: {selected_sensor} (Full)")
+
+    fig_sel_full = go.Figure()
+    fig_sel_full.add_trace(go.Scatter(x=timestamps, y=sensor_data[selected_sensor], mode='lines'))
+
+    ax_sel_full = [timestamps[i] for i in anomaly_idx]
+    ay_sel_full = [sensor_data[selected_sensor][i] for i in anomaly_idx]
+
+    fig_sel_full.add_trace(go.Scatter(
+        x=ax_sel_full,
+        y=ay_sel_full,
+        mode='markers',
+        marker=dict(color="red", size=7)
+    ))
+    fig_sel_full.update_layout(title=f"{selected_sensor}")
+    st.plotly_chart(fig_sel_full, width="stretch", key="main_chart_sel_full")
+
+    st.subheader("📈 Full Sensor Analysis (Overview)")
 
     cols = st.columns(2)
 
-    for idx, f in enumerate(features):
+    for idx, f in enumerate(display_features):
 
         fig = go.Figure()
 
@@ -300,34 +347,35 @@ Time: {t}
             marker=dict(color="red", size=7)
         ))
 
-        fig.update_layout(title=f"{f} ({units[f]})")
+        fig.update_layout(title=f"{f}")
 
-        cols[idx % 2].plotly_chart(fig, width="stretch")
+        cols[idx % 2].plotly_chart(fig, width="stretch", key=f"plot_{f}_{idx}_full")
 
-    # ===== FULL ERROR =====
+    # ===== ERROR GRAPH FULL =====
     st.subheader("⚠️ Reconstruction Error (Full)")
 
+    errors = [e for e in errors if not np.isnan(e)]
+    min_len_full = min(len(timestamps), len(errors))
+
     fig_err = go.Figure()
+    fig_err.add_trace(go.Scatter(x=timestamps[-min_len_full:], y=errors[-min_len_full:]))
 
-    fig_err.add_trace(go.Scatter(
-        x=timestamps,
-        y=errors
-    ))
+    fig_err.add_hline(
+        y=threshold,
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"Threshold ({threshold:.4f})"
+    )
 
-    if threshold > 0:
-        fig_err.add_hline(
-            y=threshold,
-            line_dash="dash",
-            line_color="red"
-        )
-
-    st.plotly_chart(fig_err, width="stretch")
+    st.plotly_chart(fig_err, width="stretch", key="main_chart_err_full")
 
     # ===== EXPORT =====
+    min_len = min(len(timestamps), len(errors), len(severity_list))
+
     df_export = pd.DataFrame({
-        "timestamp": timestamps,
-        "error": errors,
-        "severity": severity_list
+        "timestamp": timestamps[-min_len:],
+        "error": errors[-min_len:],
+        "severity": severity_list[-min_len:]
     })
 
     st.download_button(
@@ -337,14 +385,13 @@ Time: {t}
     )
 
     # ===== MODEL INFO =====
-    st.markdown("---")
     st.subheader("🧪 Model Info")
     st.write("Model: LSTM Autoencoder")
     st.write(f"Window Size: {WINDOW_SIZE}")
     st.write(f"Threshold Percentile: {threshold_percentile}%")
+    st.write(f"Threshold Value: {threshold:.4f}")
 
     # ===== EXPLANATION =====
-    st.markdown("---")
     st.subheader("🔍 Explanation")
     st.write("Low error → Normal")
     st.write("Medium error → Warning")

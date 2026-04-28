@@ -14,14 +14,26 @@ def load_data(file_path):
 
 def preprocess_data(df):
     # Convert and sort timestamp
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.sort_values('timestamp')
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp')
+        df.set_index('timestamp', inplace=True)
+    elif 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date')
+        df.set_index('date', inplace=True)
 
-    # Separate features and label
-    X = df.drop(columns=['timestamp', 'label'])
-    y = df['label']
+    # Keep only numeric columns
+    df = df.select_dtypes(include=['float64', 'int64'])
 
-    return X, y
+    # Ensure unsupervised learning (drop label if exists)
+    if 'label' in df.columns:
+        df = df.drop(columns=['label'])
+
+    # Handle missing values
+    df = df.ffill().bfill()
+
+    return df
 
 
 def scale_data(X, scaler_path=None, fit=True):

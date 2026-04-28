@@ -40,18 +40,9 @@ if __name__ == "__main__":
     detector = LSTMAnomalyDetector(threshold=0.1)
 
     # Simulate streaming
-    samples = [
-        [20.5, 35.0, 100.0, 70.0, 0.02],
-        [20.6, 35.1, 100.5, 70.2, 0.02],
-        [20.7, 35.2, 101.0, 70.1, 0.02],
-        [20.8, 35.3, 101.2, 70.3, 0.02],
-        [20.9, 35.4, 101.5, 70.4, 0.02],
-        [21.0, 35.5, 101.8, 70.5, 0.02],
-        [21.2, 35.6, 102.0, 70.6, 0.02],
-        [21.3, 35.7, 102.2, 70.7, 0.02],
-        [21.5, 35.8, 102.5, 70.8, 0.02],
-        [21.6, 35.9, 102.7, 70.9, 0.02],
-    ]
+    # Dynamically generates a random array shape matching your model's expected inputs
+    n_features = detector.scaler.n_features_in_
+    samples = np.random.rand(15, n_features).tolist()
 
     for s in samples:
         result = detector.predict(s)

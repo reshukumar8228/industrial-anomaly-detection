@@ -1,12 +1,13 @@
 import os
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+from tensorflow.keras.callbacks import EarlyStopping
 
-from src.preprocessing import load_data, preprocess_data, scale_data, create_sequences
-from src.model import build_lstm_autoencoder
+from preprocessing import load_data, preprocess_data, scale_data, create_sequences
+from model import build_lstm_autoencoder
 
 # Paths
-DATA_PATH = "data/high_anomaly_dataset.csv"
+DATA_PATH = "data/boiler_dataset.csv"
 SCALER_PATH = "models/scaler.pkl"
 MODEL_PATH = "models/lstm_autoencoder.keras"
 
@@ -18,17 +19,17 @@ def train():
     df = load_data(DATA_PATH)
 
     # ================= PREPROCESS =================
-    X, y = preprocess_data(df)
+    X = preprocess_data(df)
+    X = X[:30000]
 
     # ================= SCALE =================
     X_scaled = scale_data(X, scaler_path=SCALER_PATH, fit=True)
 
     # ================= CREATE SEQUENCES =================
     X_seq = create_sequences(X_scaled, WINDOW_SIZE)
-    y_seq = y[WINDOW_SIZE:].reset_index(drop=True)
 
-    # ================= TRAIN DATA (ONLY NORMAL) =================
-    X_train = X_seq[y_seq == 0]
+    # ================= TRAIN DATA =================
+    X_train = X_seq
 
     # ================= SPLIT =================
     X_train, X_val = train_test_split(
@@ -44,12 +45,15 @@ def train():
     # ================= TRAIN =================
     print("🚀 Training started...\n")
 
+    early_stop = EarlyStopping(patience=3, restore_best_weights=True)
+
     history = model.fit(
         X_train,
         X_train,
-        epochs=50,
+        epochs=20,
         batch_size=32,
         validation_data=(X_val, X_val),
+        callbacks=[early_stop],
         verbose=1  # ✅ shows epoch logs in terminal
     )
 
